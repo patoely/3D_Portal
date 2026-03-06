@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>3D Viewer – The Portal Specs</title>
+  <title>FBX Viewer – fullportal_textured</title>
 
   <style>
     html, body {
@@ -21,7 +21,7 @@
       position: relative;
     }
 
-    #loading, #info {
+    #loading, #info, #toolbar {
       position: absolute;
       left: 16px;
       z-index: 10;
@@ -31,16 +31,45 @@
       border-radius: 8px;
       font-size: 13px;
       line-height: 1.45;
-      max-width: 420px;
+      max-width: 520px;
     }
 
     #loading {
       top: 16px;
     }
 
+    #toolbar {
+      top: 66px;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
     #info {
       bottom: 16px;
       pointer-events: none;
+    }
+
+    button {
+      appearance: none;
+      border: 0;
+      border-radius: 6px;
+      padding: 10px 14px;
+      cursor: pointer;
+      background: #2b7fff;
+      color: #fff;
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    button.secondary {
+      background: #444;
+    }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: default;
     }
 
     canvas {
@@ -60,6 +89,12 @@
 <body>
   <div id="app">
     <div id="loading">Lade Modell ...</div>
+
+    <div id="toolbar">
+      <button id="playVideosBtn" disabled>Videos starten</button>
+      <button id="restoreTexturesBtn" class="secondary" disabled>Zu Texturen zurück</button>
+    </div>
+
     <div id="info">
       Linke Maustaste: drehen<br>
       Rechte Maustaste: verschieben<br>
@@ -74,10 +109,12 @@
     import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
 
     const MODEL_DIR = 'models/';
-    const MODEL_FILE = 'fullportal_specs.fbx';
+    const MODEL_FILE = 'fullportal_textured.fbx';
 
     const container = document.getElementById('app');
     const loadingEl = document.getElementById('loading');
+    const playVideosBtn = document.getElementById('playVideosBtn');
+    const restoreTexturesBtn = document.getElementById('restoreTexturesBtn');
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x111111);
@@ -130,6 +167,10 @@
     scene.add(ground);
 
     let model = null;
+    let isUsingVideos = false;
+
+    const originalMaps = new WeakMap();
+    const activeVideoEntries = [];
 
     const params = {
       posX: 0,
@@ -239,6 +280,10 @@
 
             mat.side = THREE.DoubleSide;
 
+            if (!originalMaps.has(mat)) {
+              originalMaps.set(mat, mat.map || null);
+            }
+
             const textureSlots = [
               'map',
               'aoMap',
@@ -288,6 +333,7 @@
         controls.target.set(0, size.y * 0.35, 0);
         controls.update();
 
+        playVideosBtn.disabled = false;
         loadingEl.textContent = 'Modell geladen';
         setTimeout(() => {
           loadingEl.style.display = 'none';
@@ -303,6 +349,151 @@
         loadingEl.textContent = 'Fehler beim Laden des FBX oder der Texturen';
       }
     );
+
+    function getBaseNameFromTexture(texture) {
+      if (!texture || !texture.image) return null;
+
+      let src = '';
+
+      if (typeof texture.image.currentSrc === 'string' && texture.image.currentSrc) {
+        src = texture.image.currentSrc;
+      } else if (typeof texture.image.src === 'string' && texture.image.src) {
+        src = texture.image.src;
+      } else if (typeof texture.name === 'string' && texture.name) {
+        src = texture.name;
+      }
+
+      if (!src) return null;
+
+      const cleaned = decodeURIComponent(src).replace(/\\/g, '/');
+      const filename = cleaned.split('/').pop() || '';
+      const dotIndex = filename.lastIndexOf('.');
+      if (dotIndex === -1) return filename;
+
+      return filename.slice(0, dotIndex);
+    }
+
+    function createVideoTexture(videoUrl) {
+      const video = document.createElement('video');
+      video.src = videoUrl;
+      video.loop = true;
+      video.muted = true;
+      video.playsInline = true;
+      video.preload = 'auto';
+      video.crossOrigin = 'anonymous';
+
+      const videoTexture = new THREE.VideoTexture(video);
+      videoTexture.colorSpace = THREE.SRGBColorSpace;
+      videoTexture.minFilter = THREE.LinearFilter;
+      videoTexture.magFilter = THREE.LinearFilter;
+      videoTexture.generateMipmaps = false;
+
+      return { video, videoTexture };
+    }
+
+    async function switchToVideos() {
+      if (!model || isUsingVideos) return;
+
+      playVideosBtn.disabled = true;
+      restoreTexturesBtn.disabled = true;
+      loadingEl.style.display = 'block';
+      loadingEl.textContent = 'Starte Video-Texturen ...';
+
+      const materialUpdates = [];
+
+      model.traverse((child) => {
+        if (!child.isMesh || !child.material) return;
+
+        const materials = Array.isArray(child.material)
+          ? child.material
+          : [child.material];
+
+        materials.forEach((mat) => {
+          if (!mat) return;
+
+          const originalMap = originalMaps.get(mat);
+          const baseName = getBaseNameFromTexture(originalMap);
+
+          if (!originalMap || !baseName) return;
+
+          const videoUrl = MODEL_DIR + baseName + '.mp4';
+          materialUpdates.push({ mat, videoUrl });
+        });
+      });
+
+      try {
+        for (const entry of materialUpdates) {
+          const { mat, videoUrl } = entry;
+          const { video, videoTexture } = createVideoTexture(videoUrl);
+
+          await video.play();
+
+          activeVideoEntries.push({ mat, video, videoTexture });
+
+          mat.map = videoTexture;
+          mat.needsUpdate = true;
+        }
+
+        isUsingVideos = true;
+        playVideosBtn.disabled = true;
+        restoreTexturesBtn.disabled = false;
+        loadingEl.style.display = 'none';
+      } catch (error) {
+        stopAndDisposeVideos();
+        restoreOriginalTextures();
+        loadingEl.textContent = 'Video konnte nicht gestartet werden';
+        playVideosBtn.disabled = false;
+        restoreTexturesBtn.disabled = true;
+      }
+    }
+
+    function restoreOriginalTextures() {
+      if (!model) return;
+
+      model.traverse((child) => {
+        if (!child.isMesh || !child.material) return;
+
+        const materials = Array.isArray(child.material)
+          ? child.material
+          : [child.material];
+
+        materials.forEach((mat) => {
+          if (!mat) return;
+          mat.map = originalMaps.get(mat) || null;
+          if (mat.map) {
+            mat.map.needsUpdate = true;
+          }
+          mat.needsUpdate = true;
+        });
+      });
+    }
+
+    function stopAndDisposeVideos() {
+      while (activeVideoEntries.length > 0) {
+        const entry = activeVideoEntries.pop();
+
+        try {
+          entry.video.pause();
+          entry.video.removeAttribute('src');
+          entry.video.load();
+        } catch (e) {}
+
+        try {
+          entry.videoTexture.dispose();
+        } catch (e) {}
+      }
+    }
+
+    function switchBackToTextures() {
+      stopAndDisposeVideos();
+      restoreOriginalTextures();
+      isUsingVideos = false;
+      playVideosBtn.disabled = false;
+      restoreTexturesBtn.disabled = true;
+    }
+
+    playVideosBtn.addEventListener('click', switchToVideos);
+    restoreTexturesBtn.addEventListener('click', switchBackToTextures);
 
     function applyTransforms() {
       if (!model) return;
