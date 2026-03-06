@@ -31,7 +31,7 @@
       border-radius: 8px;
       font-size: 13px;
       line-height: 1.45;
-      max-width: 520px;
+      max-width: 560px;
     }
 
     #loading {
@@ -91,8 +91,8 @@
     <div id="loading">Lade Modell ...</div>
 
     <div id="toolbar">
-      <button id="playVideosBtn" disabled>Videos starten</button>
-      <button id="restoreTexturesBtn" class="secondary" disabled>Zu Texturen zurück</button>
+      <button id="videoPreviewBtn" disabled>Video Preview</button>
+      <button id="specsPreviewBtn" class="secondary" disabled>Specs Preview</button>
     </div>
 
     <div id="info">
@@ -113,8 +113,8 @@
 
     const container = document.getElementById('app');
     const loadingEl = document.getElementById('loading');
-    const playVideosBtn = document.getElementById('playVideosBtn');
-    const restoreTexturesBtn = document.getElementById('restoreTexturesBtn');
+    const videoPreviewBtn = document.getElementById('videoPreviewBtn');
+    const specsPreviewBtn = document.getElementById('specsPreviewBtn');
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x111111);
@@ -168,6 +168,7 @@
 
     let model = null;
     let isUsingVideos = false;
+    let syncInterval = null;
 
     const originalMaps = new WeakMap();
     const activeVideoEntries = [];
@@ -333,7 +334,9 @@
         controls.target.set(0, size.y * 0.35, 0);
         controls.update();
 
-        playVideosBtn.disabled = false;
+        videoPreviewBtn.disabled = false;
+        specsPreviewBtn.disabled = true;
+
         loadingEl.textContent = 'Modell geladen';
         setTimeout(() => {
           loadingEl.style.display = 'none';
@@ -391,13 +394,68 @@
       return { video, videoTexture };
     }
 
+    function waitForVideoReady(video) {
+      return new Promise((resolve, reject) => {
+        const cleanup = () => {
+          video.removeEventListener('canplaythrough', onReady);
+          video.removeEventListener('loadeddata', onReady);
+          video.removeEventListener('error', onError);
+        };
+
+        const onReady = () => {
+          cleanup();
+          resolve();
+        };
+
+        const onError = () => {
+          cleanup();
+          reject(new Error('Video konnte nicht geladen werden: ' + video.src));
+        };
+
+        if (video.readyState >= 3) {
+          resolve();
+          return;
+        }
+
+        video.addEventListener('canplaythrough', onReady, { once: true });
+        video.addEventListener('loadeddata', onReady, { once: true });
+        video.addEventListener('error', onError, { once: true });
+        video.load();
+      });
+    }
+
+    function startSyncMonitor() {
+      stopSyncMonitor();
+
+      syncInterval = setInterval(() => {
+        if (!isUsingVideos || activeVideoEntries.length < 2) return;
+
+        const master = activeVideoEntries[0].video;
+        const masterTime = master.currentTime;
+
+        for (let i = 1; i < activeVideoEntries.length; i++) {
+          const v = activeVideoEntries[i].video;
+          if (Math.abs(v.currentTime - masterTime) > 0.08) {
+            v.currentTime = masterTime;
+          }
+        }
+      }, 250);
+    }
+
+    function stopSyncMonitor() {
+      if (syncInterval) {
+        clearInterval(syncInterval);
+        syncInterval = null;
+      }
+    }
+
     async function switchToVideos() {
       if (!model || isUsingVideos) return;
 
-      playVideosBtn.disabled = true;
-      restoreTexturesBtn.disabled = true;
+      videoPreviewBtn.disabled = true;
+      specsPreviewBtn.disabled = true;
       loadingEl.style.display = 'block';
-      loadingEl.textContent = 'Starte Video-Texturen ...';
+      loadingEl.textContent = 'Bereite Videos vor ...';
 
       const materialUpdates = [];
 
@@ -422,28 +480,42 @@
       });
 
       try {
-        for (const entry of materialUpdates) {
-          const { mat, videoUrl } = entry;
+        const pendingEntries = materialUpdates.map(({ mat, videoUrl }) => {
           const { video, videoTexture } = createVideoTexture(videoUrl);
+          return { mat, video, videoTexture };
+        });
 
-          await video.play();
+        await Promise.all(
+          pendingEntries.map(entry => waitForVideoReady(entry.video))
+        );
 
-          activeVideoEntries.push({ mat, video, videoTexture });
+        pendingEntries.forEach(entry => {
+          entry.video.currentTime = 0;
+        });
 
-          mat.map = videoTexture;
-          mat.needsUpdate = true;
-        }
+        pendingEntries.forEach(entry => {
+          entry.mat.map = entry.videoTexture;
+          entry.mat.needsUpdate = true;
+        });
 
+        await Promise.all(
+          pendingEntries.map(entry => entry.video.play())
+        );
+
+        activeVideoEntries.push(...pendingEntries);
         isUsingVideos = true;
-        playVideosBtn.disabled = true;
-        restoreTexturesBtn.disabled = false;
+        startSyncMonitor();
+
+        videoPreviewBtn.disabled = true;
+        specsPreviewBtn.disabled = false;
         loadingEl.style.display = 'none';
       } catch (error) {
         stopAndDisposeVideos();
         restoreOriginalTextures();
-        loadingEl.textContent = 'Video konnte nicht gestartet werden';
-        playVideosBtn.disabled = false;
-        restoreTexturesBtn.disabled = true;
+        isUsingVideos = false;
+        loadingEl.textContent = 'Video Preview konnte nicht gestartet werden';
+        videoPreviewBtn.disabled = false;
+        specsPreviewBtn.disabled = true;
       }
     }
 
@@ -460,15 +532,15 @@
         materials.forEach((mat) => {
           if (!mat) return;
           mat.map = originalMaps.get(mat) || null;
-          if (mat.map) {
-            mat.map.needsUpdate = true;
-          }
+          if (mat.map) mat.map.needsUpdate = true;
           mat.needsUpdate = true;
         });
       });
     }
 
     function stopAndDisposeVideos() {
+      stopSyncMonitor();
+
       while (activeVideoEntries.length > 0) {
         const entry = activeVideoEntries.pop();
 
@@ -484,16 +556,16 @@
       }
     }
 
-    function switchBackToTextures() {
+    function switchBackToSpecs() {
       stopAndDisposeVideos();
       restoreOriginalTextures();
       isUsingVideos = false;
-      playVideosBtn.disabled = false;
-      restoreTexturesBtn.disabled = true;
+      videoPreviewBtn.disabled = false;
+      specsPreviewBtn.disabled = true;
     }
 
-    playVideosBtn.addEventListener('click', switchToVideos);
-    restoreTexturesBtn.addEventListener('click', switchBackToTextures);
+    videoPreviewBtn.addEventListener('click', switchToVideos);
+    specsPreviewBtn.addEventListener('click', switchBackToSpecs);
 
     function applyTransforms() {
       if (!model) return;
