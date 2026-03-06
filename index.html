@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>3D Viewer – The Portal</title>
+  <title>3D Viewer – The Portal Specs</title>
 
   <style>
     html, body {
@@ -21,7 +21,7 @@
       position: relative;
     }
 
-    #loading, #info, #debug {
+    #loading, #info {
       position: absolute;
       left: 16px;
       z-index: 10;
@@ -38,12 +38,6 @@
       top: 16px;
     }
 
-    #debug {
-      top: 66px;
-      white-space: pre-wrap;
-      display: none;
-    }
-
     #info {
       bottom: 16px;
       pointer-events: none;
@@ -51,10 +45,6 @@
 
     canvas {
       display: block;
-    }
-
-    .hint {
-      color: #8fd3ff;
     }
   </style>
 
@@ -70,7 +60,6 @@
 <body>
   <div id="app">
     <div id="loading">Lade Modell ...</div>
-    <div id="debug"></div>
     <div id="info">
       Linke Maustaste: drehen<br>
       Rechte Maustaste: verschieben<br>
@@ -89,13 +78,6 @@
 
     const container = document.getElementById('app');
     const loadingEl = document.getElementById('loading');
-    const debugEl = document.getElementById('debug');
-
-    function logDebug(...lines) {
-      debugEl.style.display = 'block';
-      debugEl.textContent += lines.join(' ') + '\n';
-      console.log(...lines);
-    }
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x111111);
@@ -223,24 +205,14 @@
         lower.endsWith('.tiff');
 
       if (isTexture) {
-        const remapped = MODEL_DIR + filename;
-        logDebug('Texture remap:', url, '->', remapped);
-        return remapped;
+        return MODEL_DIR + filename;
       }
 
       return url;
     });
 
-    manager.onStart = (url) => {
-      loadingEl.textContent = `Starte Laden: ${url}`;
-    };
-
     manager.onProgress = (url, loaded, total) => {
       loadingEl.textContent = `Lade Assets ... ${loaded}/${total}`;
-    };
-
-    manager.onError = (url) => {
-      logDebug('Fehler beim Laden:', url);
     };
 
     const loader = new FBXLoader(manager);
@@ -252,14 +224,9 @@
       (fbx) => {
         model = fbx;
 
-        let meshCount = 0;
-        let materialCount = 0;
-        let textureCount = 0;
-
         model.traverse((child) => {
           if (!child.isMesh) return;
 
-          meshCount++;
           child.castShadow = true;
           child.receiveShadow = true;
 
@@ -267,9 +234,7 @@
             ? child.material
             : (child.material ? [child.material] : []);
 
-          materialCount += materials.length;
-
-          materials.forEach((mat, index) => {
+          materials.forEach((mat) => {
             if (!mat) return;
 
             mat.side = THREE.DoubleSide;
@@ -288,7 +253,6 @@
 
             textureSlots.forEach((slot) => {
               if (mat[slot]) {
-                textureCount++;
                 if (
                   slot === 'map' ||
                   slot === 'emissiveMap' ||
@@ -303,11 +267,6 @@
             mat.needsUpdate = true;
           });
         });
-
-        logDebug('FBX geladen');
-        logDebug('Meshes:', String(meshCount));
-        logDebug('Materialien:', String(materialCount));
-        logDebug('Textur-Slots gefunden:', String(textureCount));
 
         const box = new THREE.Box3().setFromObject(model);
         const size = box.getSize(new THREE.Vector3());
@@ -332,7 +291,7 @@
         loadingEl.textContent = 'Modell geladen';
         setTimeout(() => {
           loadingEl.style.display = 'none';
-        }, 1000);
+        }, 800);
       },
       (xhr) => {
         if (xhr.total) {
@@ -340,10 +299,8 @@
           loadingEl.textContent = `Lade Modell ... ${percent.toFixed(0)}%`;
         }
       },
-      (error) => {
-        console.error(error);
-        loadingEl.textContent = 'Fehler beim Laden des FBX. Sieh in Konsole/Debug.';
-        logDebug('FBX-Load-Error:', error?.message || String(error));
+      () => {
+        loadingEl.textContent = 'Fehler beim Laden des FBX oder der Texturen';
       }
     );
 
