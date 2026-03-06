@@ -3,14 +3,15 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>FBX Viewer – Full Portal</title>
+  <title>FBX Viewer – fullportal_textured</title>
+
   <style>
     html, body {
       margin: 0;
       width: 100%;
       height: 100%;
       overflow: hidden;
-      background: #111;
+      background: #101010;
       font-family: Arial, sans-serif;
     }
 
@@ -20,34 +21,40 @@
       position: relative;
     }
 
-    #info {
+    #loading, #info, #debug {
       position: absolute;
       left: 16px;
-      bottom: 16px;
       z-index: 10;
-      color: white;
-      background: rgba(0, 0, 0, 0.45);
+      color: #fff;
+      background: rgba(0, 0, 0, 0.55);
       padding: 10px 12px;
       border-radius: 8px;
-      font-size: 14px;
-      line-height: 1.4;
-      pointer-events: none;
+      font-size: 13px;
+      line-height: 1.45;
+      max-width: 420px;
     }
 
     #loading {
-      position: absolute;
       top: 16px;
-      left: 16px;
-      z-index: 10;
-      color: white;
-      background: rgba(0, 0, 0, 0.45);
-      padding: 10px 12px;
-      border-radius: 8px;
-      font-size: 14px;
+    }
+
+    #debug {
+      top: 66px;
+      white-space: pre-wrap;
+      display: none;
+    }
+
+    #info {
+      bottom: 16px;
+      pointer-events: none;
     }
 
     canvas {
       display: block;
+    }
+
+    .hint {
+      color: #8fd3ff;
     }
   </style>
 
@@ -62,10 +69,11 @@
 </head>
 <body>
   <div id="app">
-    <div id="loading">Lade FBX-Modell ...</div>
+    <div id="loading">Lade Modell ...</div>
+    <div id="debug"></div>
     <div id="info">
-      Maus links: drehen<br>
-      Maus rechts: verschieben<br>
+      Linke Maustaste: drehen<br>
+      Rechte Maustaste: verschieben<br>
       Mausrad: zoomen
     </div>
   </div>
@@ -76,21 +84,31 @@
     import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
     import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
 
+    const MODEL_DIR = 'models/';
+    const MODEL_FILE = 'fullportal_textured.fbx';
+
     const container = document.getElementById('app');
     const loadingEl = document.getElementById('loading');
+    const debugEl = document.getElementById('debug');
+
+    function logDebug(...lines) {
+      debugEl.style.display = 'block';
+      debugEl.textContent += lines.join(' ') + '\n';
+      console.log(...lines);
+    }
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x151515);
+    scene.background = new THREE.Color(0x111111);
 
     const camera = new THREE.PerspectiveCamera(
       45,
       window.innerWidth / window.innerHeight,
       0.1,
-      5000
+      10000
     );
     camera.position.set(0, 120, 260);
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -100,24 +118,25 @@
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.target.set(0, 80, 0);
-    controls.update();
 
-    const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444444, 1.8);
+    const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444444, 1.6);
     hemiLight.position.set(0, 200, 0);
     scene.add(hemiLight);
 
     const dirLight = new THREE.DirectionalLight(0xffffff, 2.2);
-    dirLight.position.set(200, 300, 200);
+    dirLight.position.set(200, 250, 180);
     dirLight.castShadow = true;
     dirLight.shadow.mapSize.set(2048, 2048);
     scene.add(dirLight);
 
-    const fillLight = new THREE.DirectionalLight(0x88aaff, 0.8);
-    fillLight.position.set(-150, 120, -100);
+    const fillLight = new THREE.DirectionalLight(0x88aaff, 0.65);
+    fillLight.position.set(-180, 140, -120);
     scene.add(fillLight);
 
-    const grid = new THREE.GridHelper(1000, 40, 0x666666, 0x333333);
-    grid.position.y = 0;
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.35);
+    scene.add(ambientLight);
+
+    const grid = new THREE.GridHelper(1000, 40, 0x666666, 0x2c2c2c);
     scene.add(grid);
 
     const ground = new THREE.Mesh(
@@ -128,9 +147,7 @@
     ground.receiveShadow = true;
     scene.add(ground);
 
-    const loader = new FBXLoader();
     let model = null;
-    let boxHelper = null;
 
     const params = {
       posX: 0,
@@ -143,7 +160,7 @@
       wireframe: false,
       showGrid: true,
       autoRotateY: false,
-      reset: () => {
+      reset() {
         params.posX = 0;
         params.posY = 0;
         params.posZ = 0;
@@ -159,53 +176,138 @@
     const gui = new GUI();
     gui.title('Modellsteuerung');
 
-    const positionFolder = gui.addFolder('Position');
-    positionFolder.add(params, 'posX', -500, 500, 1).name('X').onChange(applyTransforms);
-    positionFolder.add(params, 'posY', -500, 500, 1).name('Y').onChange(applyTransforms);
-    positionFolder.add(params, 'posZ', -500, 500, 1).name('Z').onChange(applyTransforms);
-    positionFolder.open();
+    const fPos = gui.addFolder('Position');
+    fPos.add(params, 'posX', -500, 500, 1).name('X').onChange(applyTransforms);
+    fPos.add(params, 'posY', -500, 500, 1).name('Y').onChange(applyTransforms);
+    fPos.add(params, 'posZ', -500, 500, 1).name('Z').onChange(applyTransforms);
+    fPos.open();
 
-    const rotationFolder = gui.addFolder('Rotation');
-    rotationFolder.add(params, 'rotX', -180, 180, 1).name('X°').onChange(applyTransforms);
-    rotationFolder.add(params, 'rotY', -180, 180, 1).name('Y°').onChange(applyTransforms);
-    rotationFolder.add(params, 'rotZ', -180, 180, 1).name('Z°').onChange(applyTransforms);
-    rotationFolder.open();
+    const fRot = gui.addFolder('Rotation');
+    fRot.add(params, 'rotX', -180, 180, 1).name('X°').onChange(applyTransforms);
+    fRot.add(params, 'rotY', -180, 180, 1).name('Y°').onChange(applyTransforms);
+    fRot.add(params, 'rotZ', -180, 180, 1).name('Z°').onChange(applyTransforms);
+    fRot.open();
 
-    const scaleFolder = gui.addFolder('Skalierung');
-    scaleFolder.add(params, 'scale', 0.01, 10, 0.01).name('Uniform').onChange(applyTransforms);
-    scaleFolder.open();
+    const fScale = gui.addFolder('Skalierung');
+    fScale.add(params, 'scale', 0.01, 10, 0.01).name('Uniform').onChange(applyTransforms);
+    fScale.open();
 
-    const viewFolder = gui.addFolder('Ansicht');
-    viewFolder.add(params, 'wireframe').name('Wireframe').onChange(setWireframe);
-    viewFolder.add(params, 'showGrid').name('Grid').onChange(v => {
+    const fView = gui.addFolder('Ansicht');
+    fView.add(params, 'wireframe').name('Wireframe').onChange(setWireframe);
+    fView.add(params, 'showGrid').name('Grid').onChange(v => {
       grid.visible = v;
+      ground.visible = v;
     });
-    viewFolder.add(params, 'autoRotateY').name('Auto Rotate Y');
-    viewFolder.open();
+    fView.add(params, 'autoRotateY').name('Auto Rotate Y');
+    fView.open();
 
     gui.add(params, 'reset').name('Reset');
 
+    const manager = new THREE.LoadingManager();
+
+    manager.setURLModifier((url) => {
+      const cleaned = decodeURIComponent(url).replace(/\\/g, '/');
+      const filename = cleaned.split('/').pop();
+
+      if (!filename) return url;
+
+      const lower = filename.toLowerCase();
+      const isTexture =
+        lower.endsWith('.png') ||
+        lower.endsWith('.jpg') ||
+        lower.endsWith('.jpeg') ||
+        lower.endsWith('.webp') ||
+        lower.endsWith('.bmp') ||
+        lower.endsWith('.tga') ||
+        lower.endsWith('.tif') ||
+        lower.endsWith('.tiff');
+
+      if (isTexture) {
+        const remapped = MODEL_DIR + filename;
+        logDebug('Texture remap:', url, '->', remapped);
+        return remapped;
+      }
+
+      return url;
+    });
+
+    manager.onStart = (url) => {
+      loadingEl.textContent = `Starte Laden: ${url}`;
+    };
+
+    manager.onProgress = (url, loaded, total) => {
+      loadingEl.textContent = `Lade Assets ... ${loaded}/${total}`;
+    };
+
+    manager.onError = (url) => {
+      logDebug('Fehler beim Laden:', url);
+    };
+
+    const loader = new FBXLoader(manager);
+    loader.setPath(MODEL_DIR);
+    loader.setResourcePath(MODEL_DIR);
+
     loader.load(
-      'models/fullportal_textured.fbx',
+      MODEL_FILE,
       (fbx) => {
         model = fbx;
 
-        model.traverse((child) => {
-          if (child.isMesh) {
-            child.castShadow = true;
-            child.receiveShadow = true;
+        let meshCount = 0;
+        let materialCount = 0;
+        let textureCount = 0;
 
-            if (Array.isArray(child.material)) {
-              child.material.forEach((mat) => {
-                if ('transparent' in mat) mat.transparent = true;
-                if ('side' in mat) mat.side = THREE.DoubleSide;
-              });
-            } else if (child.material) {
-              if ('transparent' in child.material) child.material.transparent = true;
-              if ('side' in child.material) child.material.side = THREE.DoubleSide;
-            }
-          }
+        model.traverse((child) => {
+          if (!child.isMesh) return;
+
+          meshCount++;
+          child.castShadow = true;
+          child.receiveShadow = true;
+
+          const materials = Array.isArray(child.material)
+            ? child.material
+            : (child.material ? [child.material] : []);
+
+          materialCount += materials.length;
+
+          materials.forEach((mat, index) => {
+            if (!mat) return;
+
+            mat.side = THREE.DoubleSide;
+
+            const textureSlots = [
+              'map',
+              'aoMap',
+              'alphaMap',
+              'bumpMap',
+              'normalMap',
+              'specularMap',
+              'emissiveMap',
+              'metalnessMap',
+              'roughnessMap'
+            ];
+
+            textureSlots.forEach((slot) => {
+              if (mat[slot]) {
+                textureCount++;
+                if (
+                  slot === 'map' ||
+                  slot === 'emissiveMap' ||
+                  slot === 'specularMap'
+                ) {
+                  mat[slot].colorSpace = THREE.SRGBColorSpace;
+                }
+                mat[slot].needsUpdate = true;
+              }
+            });
+
+            mat.needsUpdate = true;
+          });
         });
+
+        logDebug('FBX geladen');
+        logDebug('Meshes:', String(meshCount));
+        logDebug('Materialien:', String(materialCount));
+        logDebug('Textur-Slots gefunden:', String(textureCount));
 
         const box = new THREE.Box3().setFromObject(model);
         const size = box.getSize(new THREE.Vector3());
@@ -216,32 +318,32 @@
 
         scene.add(model);
 
-        boxHelper = new THREE.BoxHelper(model, 0x00ffff);
-        boxHelper.visible = false;
-        scene.add(boxHelper);
-
-        const maxDim = Math.max(size.x, size.y, size.z);
-        const distance = maxDim * 1.8 || 200;
+        const maxDim = Math.max(size.x, size.y, size.z) || 200;
+        const distance = maxDim * 1.8;
 
         camera.position.set(distance * 0.6, distance * 0.5, distance);
         camera.near = Math.max(0.1, maxDim / 1000);
-        camera.far = Math.max(5000, maxDim * 20);
+        camera.far = Math.max(10000, maxDim * 30);
         camera.updateProjectionMatrix();
 
         controls.target.set(0, size.y * 0.35, 0);
         controls.update();
 
-        loadingEl.style.display = 'none';
+        loadingEl.textContent = 'Modell geladen';
+        setTimeout(() => {
+          loadingEl.style.display = 'none';
+        }, 1000);
       },
       (xhr) => {
         if (xhr.total) {
           const percent = (xhr.loaded / xhr.total) * 100;
-          loadingEl.textContent = `Lade FBX-Modell ... ${percent.toFixed(0)}%`;
+          loadingEl.textContent = `Lade Modell ... ${percent.toFixed(0)}%`;
         }
       },
       (error) => {
         console.error(error);
-        loadingEl.textContent = 'Fehler beim Laden des Modells. Prüfe Pfad und Texturen.';
+        loadingEl.textContent = 'Fehler beim Laden des FBX. Sieh in Konsole/Debug.';
+        logDebug('FBX-Load-Error:', error?.message || String(error));
       }
     );
 
@@ -257,8 +359,6 @@
       model.rotation.z = THREE.MathUtils.degToRad(params.rotZ);
 
       model.scale.setScalar(params.scale);
-
-      if (boxHelper) boxHelper.update();
     }
 
     function setWireframe(enabled) {
@@ -267,13 +367,16 @@
       model.traverse((child) => {
         if (!child.isMesh || !child.material) return;
 
-        if (Array.isArray(child.material)) {
-          child.material.forEach((mat) => {
-            if ('wireframe' in mat) mat.wireframe = enabled;
-          });
-        } else {
-          if ('wireframe' in child.material) child.material.wireframe = enabled;
-        }
+        const materials = Array.isArray(child.material)
+          ? child.material
+          : [child.material];
+
+        materials.forEach((mat) => {
+          if ('wireframe' in mat) {
+            mat.wireframe = enabled;
+            mat.needsUpdate = true;
+          }
+        });
       });
     }
 
